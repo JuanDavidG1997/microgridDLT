@@ -1,4 +1,4 @@
 __pycache__/
-microgrid_env/
+microgrid_venv/
 .ipynb_checkpoints/*
 pymgrid/*
