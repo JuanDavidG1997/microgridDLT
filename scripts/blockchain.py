@@ -1,5 +1,12 @@
 # Blockchain - Agent class definition
 
+import json
+import numpy as np
+import pandas as pd
+import time
+from hashlib import sha256
+from bitcoinaddress import Wallet
+
 class Block:
 
     def __init__(self, index, transactions, timestamp, previous_hash, nonce=0):
@@ -145,7 +152,6 @@ class Wrapper:
 
     def new_transaction(self, tx_data):
         required_fields = ['author', 'content']
-
         for field in required_fields:
             if not tx_data.get(field):
                 return "Invalid transaction data"

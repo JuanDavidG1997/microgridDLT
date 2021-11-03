@@ -1,5 +1,5 @@
-from iota import ProposedTransaction, Address, Tag, TryteString, Iota, Transaction
-from iota.crypto.types import Seed
+# from iota import ProposedTransaction, Address, Tag, TryteString, Iota, Transaction
+# from iota.crypto.types import Seed
 import json
 import pandapower as pp
 import numpy as np
@@ -12,6 +12,11 @@ from hashlib import sha256
 import time
 from bitcoinaddress import Wallet
 from tqdm import tqdm
+import argparse
+
+from blockchain import Wrapper
+
+from blockchain import Agent
 
 def create_synthetic_data(d_steps, d_num_agents, d_t_gens):
     """ Create files with fake daata
@@ -30,7 +35,7 @@ def create_synthetic_data(d_steps, d_num_agents, d_t_gens):
         supply_df.iloc[gen] = np.zeros((1, d_steps))
     return demand_df, price_df, supply_df
 
-def single_sided_auction(node_data):
+def single_sided_auction(node_data, supply, demand, price, agents):
     node_vec = []
     supply_vec = []
     supply_price = []
@@ -80,8 +85,7 @@ def micro_grid_exec(step, supply, demand, price, agents):
 
     return pf_result
 
-def payment_setup_block(step, auction_price, wrapper, supply, demand, price, agents):
-
+def payment_setup(step, auction_price, wrapper, supply, demand, price, agents):
     power_per_agent = []
     for agent in agents:
         agent.get_node()
@@ -127,75 +131,92 @@ def payment_setup_block(step, auction_price, wrapper, supply, demand, price, age
         try:
             info_dict['node'] = payment_info[index]['node']
             info_dict['power'] = payment_info[index]['total']
-            info_dict['seller'] = agents[payment_info[index]['node'][0]].get_address()
-        except:
-            pass
-        gather_data[index] = info_dict
-    for index, agent in enumerate(agents):
-        data = gather_data[index]
-        agent.set_payment_data(data)
-
-    pay_nodes = set(nodes) - set(gen_nodes)
-    for node in pay_nodes:
-        agents[node].pay_power(step, wrapper)
-
-
-def payment_setup_iota(step):
-    power_per_agent = []
-    for agent in agents:
-        agent.get_node()
-        demand = agent.demand[0]
-        try:
-            supply = gen_dict[agent.get_node()]
-        except:
-            supply = agent.get_supply()[0]
-        to_app = supply - demand
-        if abs(to_app) < 0.00001:
-            to_app = 0
-        power_per_agent.append(to_app)
-
-    to_earn = {}
-    to_pay = {}
-    for index, payment in enumerate(power_per_agent):
-        if payment < 0:
-            to_pay[index] = abs(payment)
-        else:
-            to_earn[index] = payment
-
-    payment_info = {}
-    for payer, balance in to_pay.items():
-        payment_info[payer] = {'node': [], 'total': []}
-        for earner, gain in to_earn.items():
-            if gain > 0:
-                if balance >= gain:
-                    payment_info[payer]['node'].append(earner)
-                    payment_info[payer]['total'].append(gain)
-                    to_pay[payer] = to_pay[payer] - gain
-                    to_earn[earner] = to_earn[earner] - gain
-                elif balance < gain:
-                    payment_info[payer]['node'].append(earner)
-                    payment_info[payer]['total'].append(balance)
-                    to_pay[payer] = to_pay[payer] - balance
-                    to_earn[earner] = to_earn[earner] - balance
-                    break
-    gather_data = {}
-    for index, agent in enumerate(agents):
-        info_dict = {}
-        info_dict['price'] = auction_price
-        try:
-            info_dict['node'] = payment_info[index]['node']
-            info_dict['power'] = payment_info[index]['total']
+            if dlt == "blockchain":
+                info_dict['seller'] = agents[payment_info[index]['node'][0]].get_address()
         except:
             pass
         gather_data[index] = info_dict
 
     for index, agent in enumerate(agents):
-        address = addresses_dict[index]['price_address'][step]
-        data = gather_data[index]
-        tx = ProposedTransaction(address=Address(address), message=TryteString.from_unicode(json.dumps(data)), tag=Tag('PRICE'),value=0)
-        tx = api.prepare_transfer(transfers=[tx])
-        result = api.send_trytes(tx['trytes'], depth=3, min_weight_magnitude=9)
+        if dlt == "blockchain":
+            data = gather_data[index]
+            agent.set_payment_data(data)
+        elif dlt == "iota":
+            address = addresses_dict[index]['price_address'][step]
+            data = gather_data[index]
+            tx = ProposedTransaction(address=Address(address), message=TryteString.from_unicode(json.dumps(data)), tag=Tag('PRICE'),value=0)
+            tx = api.prepare_transfer(transfers=[tx])
+            result = api.send_trytes(tx['trytes'], depth=3, min_weight_magnitude=9)
 
     pay_nodes = set(nodes) - set(gen_nodes)
     for node in pay_nodes:
-        agents[node].pay_power(step)
+        if dlt == "blockchain":
+            agents[node].pay_power(step, wrapper)
+        elif dlt == 'iota':
+            agents[node].pay_power(step)
+
+def exec(dlt):
+    d_steps_vec = [1]
+    d_agents_vec = [50]
+    results_df = pd.DataFrame(columns = ['steps', 'agents', 'dlt', 'mean', 'max', 'min'])
+    for d_steps in d_steps_vec:
+        for d_num_agents in d_agents_vec:
+            d_t_gens = int(0.3 * d_num_agents)
+
+            demand, price, supply = create_synthetic_data(d_steps, d_num_agents, d_t_gens)
+            steps_vec = np.linspace(0, d_steps, d_steps + 1)
+
+            times_vec = []
+            num_agents = demand.shape[0]
+            steps = demand.shape[1]
+
+            a_series = (supply != 0).any(axis=1)
+            new_df = supply.loc[a_series]
+            gen_nodes = np.array(new_df.index)
+
+            addresses = []
+            for i in tqdm(range(0, num_agents)):
+                wallet = Wallet()
+                addresses.append(wallet.key.__dict__['mainnet'].__dict__['wif'])
+            wrapper = Wrapper()
+            agents = []
+            print('Created addresses')
+            for index in tqdm(range(0, num_agents)):
+                agents.append(Agent(np.array(demand.iloc[index]),
+                                   np.array(supply.iloc[index]),
+                                   index, addresses[index],
+                                   np.array(price.iloc[index]), wrapper))
+            nodes = list(np.linspace(0,num_agents-1, num_agents, dtype=np.int))
+            steps_vec = list(np.linspace(0,steps-1, steps, dtype=np.int))
+            times_vec = []
+            for step in tqdm(steps_vec):
+                start = time.time()
+                step_energy_info = []
+                for index, agent in enumerate(agents):
+                    node, info_dict = agent.publish_energy_info(step)
+                    step_energy_info.append(info_dict)
+                supply_df, ED, auction_price = single_sided_auction(step_energy_info,supply, demand, price, agents)
+                pf_result = micro_grid_exec(step, supply, demand, price, agents)
+                supply_df.set_index('Agents', inplace=True)
+                gen_values = pf_result['p_mw']
+                gen_dict = dict(zip(gen_nodes, gen_values))
+                total_demand = sum(supply_df['Demand'])
+                total_supply = sum(gen_dict.values())
+                losses = total_supply - total_demand
+                payment_setup(step, auction_price, wrapper, supply, demand, price, agents)
+                wrapper.mine_unconfirmed_transactions()
+                times_vec.append(time.time()-start)
+            new_df = pd.DataFrame(data={'steps': [d_steps],
+                                         'agents': [d_num_agents],
+                                         'dlt': ['blockchain'],
+                                         'mean': [np.mean(times_vec)],
+                                         'max': [np.max(times_vec)],
+                                         'min': [np.min(times_vec)]})
+            results_df = results_df.append(new_df, ignore_index = True)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("dlt", help="Select DLT to test",
+                    type=str)
+args = parser.parse_args()
+
+exec(args.dlt)
