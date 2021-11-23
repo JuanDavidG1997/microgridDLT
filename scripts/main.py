@@ -155,68 +155,68 @@ def payment_setup(step, auction_price, wrapper, supply, demand, price, agents):
         elif dlt == 'iota':
             agents[node].pay_power(step)
 
-def exec(dlt):
-    d_steps_vec = [1]
-    d_agents_vec = [50]
+def exec(dlt, num_agents, num_steps):
     results_df = pd.DataFrame(columns = ['steps', 'agents', 'dlt', 'mean', 'max', 'min'])
-    for d_steps in d_steps_vec:
-        for d_num_agents in d_agents_vec:
-            d_t_gens = int(0.3 * d_num_agents)
+    d_t_gens = int(0.3 * num_agents)
 
-            demand, price, supply = create_synthetic_data(d_steps, d_num_agents, d_t_gens)
-            steps_vec = np.linspace(0, d_steps, d_steps + 1)
+    demand, price, supply = create_synthetic_data(num_steps, num_agents, d_t_gens)
+    steps_vec = np.linspace(0, num_steps, num_steps + 1)
 
-            times_vec = []
-            num_agents = demand.shape[0]
-            steps = demand.shape[1]
+    times_vec = []
+    num_agents = demand.shape[0]
+    steps = demand.shape[1]
 
-            a_series = (supply != 0).any(axis=1)
-            new_df = supply.loc[a_series]
-            gen_nodes = np.array(new_df.index)
+    a_series = (supply != 0).any(axis=1)
+    new_df = supply.loc[a_series]
+    gen_nodes = np.array(new_df.index)
 
-            addresses = []
-            for i in tqdm(range(0, num_agents)):
-                wallet = Wallet()
-                addresses.append(wallet.key.__dict__['mainnet'].__dict__['wif'])
-            wrapper = Wrapper()
-            agents = []
-            print('Created addresses')
-            for index in tqdm(range(0, num_agents)):
-                agents.append(Agent(np.array(demand.iloc[index]),
-                                   np.array(supply.iloc[index]),
-                                   index, addresses[index],
-                                   np.array(price.iloc[index]), wrapper))
-            nodes = list(np.linspace(0,num_agents-1, num_agents, dtype=np.int))
-            steps_vec = list(np.linspace(0,steps-1, steps, dtype=np.int))
-            times_vec = []
-            for step in tqdm(steps_vec):
-                start = time.time()
-                step_energy_info = []
-                for index, agent in enumerate(agents):
-                    node, info_dict = agent.publish_energy_info(step)
-                    step_energy_info.append(info_dict)
-                supply_df, ED, auction_price = single_sided_auction(step_energy_info,supply, demand, price, agents)
-                pf_result = micro_grid_exec(step, supply, demand, price, agents)
-                supply_df.set_index('Agents', inplace=True)
-                gen_values = pf_result['p_mw']
-                gen_dict = dict(zip(gen_nodes, gen_values))
-                total_demand = sum(supply_df['Demand'])
-                total_supply = sum(gen_dict.values())
-                losses = total_supply - total_demand
-                payment_setup(step, auction_price, wrapper, supply, demand, price, agents)
-                wrapper.mine_unconfirmed_transactions()
-                times_vec.append(time.time()-start)
-            new_df = pd.DataFrame(data={'steps': [d_steps],
-                                         'agents': [d_num_agents],
-                                         'dlt': ['blockchain'],
-                                         'mean': [np.mean(times_vec)],
-                                         'max': [np.max(times_vec)],
-                                         'min': [np.min(times_vec)]})
-            results_df = results_df.append(new_df, ignore_index = True)
+    addresses = []
+    for i in tqdm(range(0, num_agents)):
+        wallet = Wallet()
+        addresses.append(wallet.key.__dict__['mainnet'].__dict__['wif'])
+    wrapper = Wrapper()
+    agents = []
+    print('Created addresses')
+    for index in tqdm(range(0, num_agents)):
+        agents.append(Agent(np.array(demand.iloc[index]),
+                           np.array(supply.iloc[index]),
+                           index, addresses[index],
+                           np.array(price.iloc[index]), wrapper))
+    nodes = list(np.linspace(0,num_agents-1, num_agents, dtype=np.int))
+    steps_vec = list(np.linspace(0,steps-1, steps, dtype=np.int))
+    times_vec = []
+    for step in tqdm(steps_vec):
+        start = time.time()
+        step_energy_info = []
+        for index, agent in enumerate(agents):
+            node, info_dict = agent.publish_energy_info(step)
+            step_energy_info.append(info_dict)
+        supply_df, ED, auction_price = single_sided_auction(step_energy_info,supply, demand, price, agents)
+        pf_result = micro_grid_exec(step, supply, demand, price, agents)
+        supply_df.set_index('Agents', inplace=True)
+        gen_values = pf_result['p_mw']
+        gen_dict = dict(zip(gen_nodes, gen_values))
+        total_demand = sum(supply_df['Demand'])
+        total_supply = sum(gen_dict.values())
+        losses = total_supply - total_demand
+        payment_setup(step, auction_price, wrapper, supply, demand, price, agents)
+        wrapper.mine_unconfirmed_transactions()
+        times_vec.append(time.time()-start)
+    new_df = pd.DataFrame(data={'steps': [d_steps],
+                                 'agents': [d_num_agents],
+                                 'dlt': ['blockchain'],
+                                 'mean': [np.mean(times_vec)],
+                                 'max': [np.max(times_vec)],
+                                 'min': [np.min(times_vec)]})
+    results_df = results_df.append(new_df, ignore_index = True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("dlt", help="Select DLT to test",
                     type=str)
+parser.add_argument("num_agents", help="Number of agents",
+                    type=int)
+parser.add_argument("num_steps", help="Number of steps",
+                    type=str)
 args = parser.parse_args()
 
-exec(args.dlt)
+exec(args.dlt, args.num_agents, args.num_steps)
